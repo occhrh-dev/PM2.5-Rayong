@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PM2.5 ระยอง — ค่าฝุ่นรายตำบล Real-time</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌫️</text></svg>">
 <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 <style>
@@ -90,8 +91,14 @@ function centroid(f){
 }
 
 async function init(){
-  gj = await (await fetch('rayong_tambon.geojson')).json();
-  gj.features.forEach(f=>{ centroids[f.properties.tam_code]=centroid(f); f.properties.pm25=null; f.properties.level='nodata'; });
+  const [gjr, cr] = await Promise.all([fetch('rayong_tambon.geojson'), fetch('data/centroids.json')]);
+  gj = await gjr.json();
+  const pre = cr.ok ? await cr.json() : {};
+  gj.features.forEach(f=>{
+    const c=f.properties.tam_code;
+    centroids[c] = pre[c] || centroid(f); // ใช้จุด polylabel จากไฟล์ ถ้าไม่มีค่อยคำนวณ
+    f.properties.pm25=null; f.properties.level='nodata';
+  });
 
   STYLES = {
     streets:`https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
