@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PM2.5 ระยอง — ค่าฝุ่นรายตำบล Real-time</title>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<style>
+  :root{
+    --c-vgood:#3BB3F4; --c-good:#3BC66E; --c-mod:#F4D23B;
+    --c-unh:#F49C3B; --c-vunh:#E8503B; --c-nodata:#B8C2CC;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;font-family:'Sarabun','Segoe UI',sans-serif}
+  body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header{background:#16324a;color:#fff;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:10}
+  header h1{font-size:17px;font-weight:700}
+  header .sub{font-size:12px;opacity:.75}
+  #updated{margin-left:auto;font-size:12px;background:rgba(255,255,255,.12);padding:4px 10px;border-radius:14px}
+  #refreshBtn{background:#3BB3F4;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer}
+  #refreshBtn:disabled{opacity:.5;cursor:wait}
+  #map{flex:1}
+  .legend{position:absolute;bottom:24px;left:12px;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.2);padding:10px 12px;font-size:12px;z-index:5}
+  .legend b{display:block;margin-bottom:6px;font-size:13px}
+  .lrow{display:flex;align-items:center;gap:7px;margin:3px 0}
+  .swatch{width:16px;height:16px;border-radius:4px;flex:none}
+  #progress{position:absolute;top:12px;left:50%;transform:translateX(-50%);background:#fff;padding:6px 16px;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.25);font-size:13px;z-index:6;display:none}
+  .maplibregl-popup-content{font-family:'Sarabun',sans-serif;padding:12px 14px;min-width:190px}
+  .pp-name{font-weight:700;font-size:15px}
+  .pp-amp{font-size:12px;color:#666;margin-bottom:6px}
+  .pp-val{font-size:26px;font-weight:800}
+  .pp-unit{font-size:12px;color:#666}
+  .pp-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;color:#fff;margin-top:4px}
+  .pp-time{font-size:11px;color:#999;margin-top:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌫️ PM2.5 จังหวัดระยอง</h1>
+  <span class="sub">รายตำบล · ข้อมูล GISTDA</span>
+  <span id="updated">กำลังโหลด…</span>
+  <button id="refreshBtn" onclick="loadPM(true)">รีเฟรช</button>
+</header>
+<div id="map"></div>
+<div id="progress">กำลังดึงข้อมูลฝุ่น… <span id="pcount"></span></div>
+<div class="legend">
+  <b>PM2.5 (µg/m³) เกณฑ์ไทย</b>
+  <div class="lrow"><span class="swatch" style="background:var(--c-vgood)"></span>0 – 15 ดีมาก</div>
+  <div class="lrow"><span class="swatch" style="background:var(--c-good)"></span>15.1 – 25 ดี</div>
+  <div class="lrow"><span class="swatch" style="background:var(--c-mod)"></span>25.1 – 37.5 ปานกลาง</div>
+  <div class="lrow"><span class="swatch" style="background:var(--c-unh)"></span>37.6 – 75 เริ่มมีผลต่อสุขภาพ</div>
+  <div class="lrow"><span class="swatch" style="background:var(--c-vunh)"></span>&gt; 75 มีผลต่อสุขภาพ</div>
+  <div class="lrow"><span class="swatch" style="background:var(--c-nodata)"></span>ไม่มีข้อมูล</div>
+</div>
+<script>
+// ================= CONFIG =================
+const MAPTILER_KEY = 'XOw46Ht6gxyHhSCkLXPf';
+// GISTDA endpoint (แอปเช็คฝุ่นใช้) — ถ้าโดน CORS ให้ตั้ง PROXY_URL เป็น Cloudflare Worker
+const GISTDA_URL = (lat,lng)=>`https://pm25.gistda.or.th/rest/getPm25byLocation?lat=${lat}&lng=${lng}`;
+const PROXY_URL = ''; // ex: 'https://pm25-proxy.xxx.workers.dev/?lat={lat}&lng={lng}'
+const REFRESH_MIN = 60;        // auto refresh ทุก 60 นาที
+const CACHE_MIN = 50;          // ใช้ cache ถ้าอายุไม่เกิน 50 นาที
+const CONCURRENCY = 6;
+// ==========================================
+
+const COLORS = {vgood:'#3BB3F4',good:'#3BC66E',mod:'#F4D23B',unh:'#F49C3B',vunh:'#E8503B',nodata:'#B8C2CC'};
+function levelOf(v){
+  if(v==null||isNaN(v)) return ['nodata','ไม่มีข้อมูล'];
+  if(v<=15) return ['vgood','ดีมาก'];
+  if(v<=25) return ['good','ดี'];
+  if(v<=37.5) return ['mod','ปานกลาง'];
+  if(v<=75) return ['unh','เริ่มมีผลต่อสุขภาพ'];
+  return ['vunh','มีผลต่อสุขภาพ'];
+}
+
+let map, gj, centroids={}, pmData={}; // pmData[tam_code] = {pm25, time}
+
+function centroid(f){
+  const g=f.geometry;
+  let ring = g.type==='Polygon' ? g.coordinates[0] : g.coordinates.reduce((a,b)=>b[0].length>a[0].length?b:a)[0];
+  let x=0,y=0; ring.forEach(c=>{x+=c[0];y+=c[1]});
+  return [x/ring.length, y/ring.length];
+}
+
+async function init(){
+  gj = await (await fetch('rayong_tambon.geojson')).json();
+  gj.features.forEach(f=>{ centroids[f.properties.tam_code]=centroid(f); f.properties.pm25=null; f.properties.level='nodata'; });
+
+  map = new maplibregl.Map({
+    container:'map',
+    style:`https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
+    center:[101.35,12.85], zoom:9.3
+  });
+  map.addControl(new maplibregl.NavigationControl());
+
+  map.on('load',()=>{
+    map.addSource('tambon',{type:'geojson',data:gj});
+    map.addLayer({id:'tambon-fill',type:'fill',source:'tambon',paint:{
+      'fill-color':['match',['get','level'],
+        'vgood',COLORS.vgood,'good',COLORS.good,'mod',COLORS.mod,
+        'unh',COLORS.unh,'vunh',COLORS.vunh,COLORS.nodata],
+      'fill-opacity':0.55
+    }});
+    map.addLayer({id:'tambon-line',type:'line',source:'tambon',paint:{'line-color':'#16324a','line-width':0.8,'line-opacity':0.6}});
+
+    map.on('click','tambon-fill',e=>{
+      const p=e.features[0].properties;
+      const [lv,label]=levelOf(p.pm25===''?null:+p.pm25);
+      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`
+        <div class="pp-name">ต.${p.tam_th}</div>
+        <div class="pp-amp">อ.${p.amp_th} จ.ระยอง</div>
+        <span class="pp-val" style="color:${COLORS[lv]}">${p.pm25!=null&&p.pm25!==''?(+p.pm25).toFixed(1):'–'}</span>
+        <span class="pp-unit"> µg/m³</span><br>
+        <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
+        <div class="pp-time">${p.pm_time||''}</div>
+      `).addTo(map);
+    });
+    map.on('mouseenter','tambon-fill',()=>map.getCanvas().style.cursor='pointer');
+    map.on('mouseleave','tambon-fill',()=>map.getCanvas().style.cursor='');
+
+    loadPM(false);
+    setInterval(()=>loadPM(true), REFRESH_MIN*60*1000);
+  });
+}
+
+async function fetchPoint(lat,lng){
+  const url = PROXY_URL
+    ? PROXY_URL.replace('{lat}',lat).replace('{lng}',lng)
+    : GISTDA_URL(lat,lng);
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const j = await r.json();
+  // โครงสร้าง GISTDA: ปรับ path ตาม JSON จริง — รองรับหลายรูปแบบ
+  const d = j.data ?? j;
+  const pm = d.pm25 ?? d.PM25 ?? d.pm2_5 ?? (Array.isArray(d.pm25Data)?d.pm25Data[0]:null) ?? d.value ?? null;
+  const t = d.datetimeThai ?? d.time ?? d.datetime ?? '';
+  return {pm25: pm!=null?+pm:null, time:t};
+}
+
+async function loadPM(force){
+  const btn=document.getElementById('refreshBtn'); btn.disabled=true;
+  const prog=document.getElementById('progress'), pc=document.getElementById('pcount');
+  prog.style.display='block';
+
+  // cache
+  const cacheKey='pm25_rayong_cache';
+  if(!force){
+    try{
+      const c=JSON.parse(localStorage.getItem(cacheKey));
+      if(c && Date.now()-c.ts < CACHE_MIN*60*1000){ pmData=c.data; applyData(c.ts); btn.disabled=false; prog.style.display='none'; return; }
+    }catch(e){}
+  }
+
+  const codes=Object.keys(centroids);
+  let done=0, fail=0;
+  pc.textContent=`0/${codes.length}`;
+  const queue=[...codes];
+  async function worker(){
+    while(queue.length){
+      const code=queue.shift();
+      const [lng,lat]=centroids[code];
+      try{
+        pmData[code]=await fetchPoint(lat.toFixed(5),lng.toFixed(5));
+      }catch(e){ fail++; }
+      done++; pc.textContent=`${done}/${codes.length}`;
+    }
+  }
+  await Promise.all(Array.from({length:CONCURRENCY},worker));
+
+  const ts=Date.now();
+  try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData})); }catch(e){}
+  applyData(ts);
+  prog.style.display='none'; btn.disabled=false;
+  if(fail===codes.length){
+    document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
+  }
+}
+
+function applyData(ts){
+  gj.features.forEach(f=>{
+    const d=pmData[f.properties.tam_code];
+    f.properties.pm25 = d?d.pm25:null;
+    f.properties.pm_time = d?d.time:'';
+    f.properties.level = levelOf(d?d.pm25:null)[0];
+  });
+  if(map.getSource('tambon')) map.getSource('tambon').setData(gj);
+  document.getElementById('updated').textContent='อัปเดต: '+new Date(ts).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})+' น.';
+}
+
+init();
+</script>
+</body>
+</html>
