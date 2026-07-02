@@ -44,6 +44,10 @@
 </header>
 <div id="map"></div>
 <div id="progress">กำลังดึงข้อมูลฝุ่น… <span id="pcount"></span></div>
+<div id="ampPanel" style="position:absolute;top:12px;right:12px;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.2);padding:10px 12px;font-size:12px;z-index:5;min-width:180px;display:none">
+  <b style="display:block;margin-bottom:6px;font-size:13px;cursor:pointer" onclick="const l=document.getElementById('ampList');l.style.display=l.style.display==='none'?'block':'none'">อันดับรายอำเภอ (µg/m³) ▾</b>
+  <div id="ampList"></div>
+</div>
 <div class="legend">
   <b>PM2.5 (µg/m³) เกณฑ์ไทย</b>
   <div class="lrow"><span class="swatch" style="background:var(--c-vgood)"></span>0 – 15 ดีมาก</div>
@@ -74,7 +78,7 @@ function levelOf(v){
   return ['vunh','มีผลต่อสุขภาพ'];
 }
 
-let map, gj, centroids={}, pmData={}, STYLES, curBase='streets'; // pmData[tam_code] = {pm25, time}
+let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null; // pmData[tam_code] = {pm25, time}
 
 function centroid(f){
   const g=f.geometry;
@@ -95,23 +99,25 @@ async function init(){
     container:'map', style:STYLES.streets,
     center:[101.35,12.85], zoom:9.3
   });
-  map.addControl(new maplibregl.NavigationControl());
+  map.addControl(new maplibregl.NavigationControl(),'bottom-right');
 
   map.on('load',()=>{
     addTambonLayers();
 
     map.on('click','tambon-fill',e=>{
       const p=e.features[0].properties;
-      const [lv,label]=levelOf(p.pm25===''?null:+p.pm25);
+      const d=pmData[p.tam_code]||{};
+      const [lv,label]=levelOf(d.pm25);
       new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`
         <div class="pp-name">ต.${p.tam_th}</div>
         <div class="pp-amp">อ.${p.amp_th} จ.ระยอง</div>
-        <span class="pp-val" style="color:${COLORS[lv]}">${p.pm25!=null&&p.pm25!==''?(+p.pm25).toFixed(1):'–'}</span>
+        <span class="pp-val" style="color:${COLORS[lv]}">${d.pm25!=null?d.pm25.toFixed(1):'–'}</span>
         <span class="pp-unit"> µg/m³</span><br>
         <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
-        ${p.avg24!=null&&p.avg24!==''?`<div class="pp-unit" style="margin-top:4px">เฉลี่ย 24 ชม.: ${(+p.avg24).toFixed(1)} µg/m³</div>`:''}
-        ${p.mismatch==='true'||p.mismatch===true?'<div class="pp-time" style="color:#E8503B">⚠️ ค่าจากตำบลข้างเคียง (centroid ตกนอกเขต)</div>':''}
-        <div class="pp-time">${p.pm_time||''}</div>
+        ${d.avg24!=null?`<div class="pp-unit" style="margin-top:4px">เฉลี่ย 24 ชม.: ${d.avg24.toFixed(1)} µg/m³</div>`:''}
+        ${sparkline(d.hist)}
+        ${d.mismatch?'<div class="pp-time" style="color:#E8503B">⚠️ ค่าจากตำบลข้างเคียง (centroid ตกนอกเขต)</div>':''}
+        <div class="pp-time">${d.time||''}</div>
       `).addTo(map);
     });
     map.on('mouseenter','tambon-fill',()=>map.getCanvas().style.cursor='pointer');
@@ -140,7 +146,8 @@ async function fetchPoint(lat,lng){
     t = dt.toLocaleString('th-TH',{timeZone:'Asia/Bangkok',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) + ' น.';
   }
   const tb = d.loc && d.loc.tb_idn!=null ? String(d.loc.tb_idn) : null;
-  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null, tb_idn: tb};
+  if(Array.isArray(d.pm25_amphoe) && d.pm25_amphoe.length) amphoeData = d.pm25_amphoe;
+  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null, tb_idn: tb, hist: hist||[]};
 }
 
 async function loadPM(force){
@@ -153,7 +160,7 @@ async function loadPM(force){
   if(!force){
     try{
       const c=JSON.parse(localStorage.getItem(cacheKey));
-      if(c && Date.now()-c.ts < CACHE_MIN*60*1000){ pmData=c.data; applyData(c.ts); btn.disabled=false; prog.style.display='none'; return; }
+      if(c && Date.now()-c.ts < CACHE_MIN*60*1000){ pmData=c.data; amphoeData=c.amphoe||null; applyData(c.ts); renderAmphoe(); btn.disabled=false; prog.style.display='none'; return; }
     }catch(e){}
   }
 
@@ -177,8 +184,8 @@ async function loadPM(force){
   await Promise.all(Array.from({length:CONCURRENCY},worker));
 
   const ts=Date.now();
-  try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData})); }catch(e){}
-  applyData(ts);
+  try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData,amphoe:amphoeData})); }catch(e){}
+  applyData(ts); renderAmphoe();
   prog.style.display='none'; btn.disabled=false;
   if(mismatches.length){
     console.warn('Tambon mismatch:', mismatches);
@@ -189,6 +196,21 @@ async function loadPM(force){
   if(fail===codes.length){
     document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
   }
+}
+
+function sparkline(hist){
+  if(!Array.isArray(hist)||hist.length<2) return '';
+  const W=180,H=44,P=4;
+  const vals=hist.map(h=>+h[0]);
+  const mn=Math.min(...vals), mx=Math.max(...vals), rng=(mx-mn)||1;
+  const pts=vals.map((v,i)=>`${(P+i*(W-2*P)/(vals.length-1)).toFixed(1)},${(H-P-(v-mn)/rng*(H-2*P)).toFixed(1)}`).join(' ');
+  const lastHr=new Date(hist[hist.length-1][1]).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
+  return `<div style="margin-top:6px">
+    <div style="font-size:11px;color:#666">แนวโน้ม 24 ชม. (สูงสุด ${mx.toFixed(1)} / ต่ำสุด ${mn.toFixed(1)})</div>
+    <svg width="${W}" height="${H}" style="display:block">
+      <polyline points="${pts}" fill="none" stroke="#3BB3F4" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="${pts.split(' ').pop().split(',')[0]}" cy="${pts.split(' ').pop().split(',')[1]}" r="3" fill="#16324a"/>
+    </svg></div>`;
 }
 
 function addTambonLayers(){
@@ -202,6 +224,20 @@ function addTambonLayers(){
   }});
   map.addLayer({id:'tambon-line',type:'line',source:'tambon',paint:{
     'line-color':curBase==='sat'?'#ffffff':'#16324a','line-width':0.8,'line-opacity':0.7}});
+  if(!map.getSource('tambon-labels')){
+    const pts={type:'FeatureCollection',features:gj.features.map(f=>({
+      type:'Feature',
+      properties:{name:f.properties.tam_th},
+      geometry:{type:'Point',coordinates:centroids[f.properties.tam_code]}
+    }))};
+    map.addSource('tambon-labels',{type:'geojson',data:pts});
+  }
+  map.addLayer({id:'tambon-label',type:'symbol',source:'tambon-labels',
+    minzoom:9.5,
+    layout:{'text-field':['get','name'],'text-size':['interpolate',['linear'],['zoom'],9.5,10,12,13],
+      'text-font':['Noto Sans Regular'],'text-allow-overlap':false},
+    paint:{'text-color':curBase==='sat'?'#ffffff':'#16324a',
+      'text-halo-color':curBase==='sat'?'rgba(0,0,0,0.7)':'rgba(255,255,255,0.9)','text-halo-width':1.4}});
 }
 
 function toggleBase(){
@@ -209,6 +245,20 @@ function toggleBase(){
   document.getElementById('baseBtn').textContent = curBase==='streets'?'🛰️ ดาวเทียม':'🗺️ แผนที่ถนน';
   map.setStyle(STYLES[curBase]);
   map.once('styledata',()=>{ addTambonLayers(); });
+}
+
+function renderAmphoe(){
+  if(!amphoeData) return;
+  const list=[...amphoeData].sort((a,b)=>b.pm25-a.pm25);
+  document.getElementById('ampList').innerHTML=list.map((a,i)=>{
+    const [lv]=levelOf(a.pm25);
+    return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0">
+      <span style="width:14px;color:#999">${i+1}</span>
+      <span style="width:10px;height:10px;border-radius:50%;background:${COLORS[lv]};flex:none"></span>
+      <span style="flex:1">${a.ap_tn}</span>
+      <b>${(+a.pm25).toFixed(1)}</b></div>`;
+  }).join('');
+  document.getElementById('ampPanel').style.display='block';
 }
 
 function applyData(ts){
