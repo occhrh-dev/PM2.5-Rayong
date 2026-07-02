@@ -1,0 +1,26 @@
+{
+ "name": "PM 2.5 @RY",
+ "short_name": "PM2.5 @RY",
+ "description": "ค่าฝุ่น PM2.5 รายตำบล จังหวัดระยอง (GISTDA + Air4Thai)",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "orientation": "portrait",
+ "background_color": "#16324a",
+ "theme_color": "#16324a",
+ "lang": "th",
+ "icons": [
+  {
+   "src": "icons/icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any maskable"
+  },
+  {
+   "src": "icons/icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any maskable"
+  }
+ ]
+}
