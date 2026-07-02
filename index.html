@@ -110,6 +110,7 @@ async function init(){
         <span class="pp-unit"> µg/m³</span><br>
         <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
         ${p.avg24!=null&&p.avg24!==''?`<div class="pp-unit" style="margin-top:4px">เฉลี่ย 24 ชม.: ${(+p.avg24).toFixed(1)} µg/m³</div>`:''}
+        ${p.mismatch==='true'||p.mismatch===true?'<div class="pp-time" style="color:#E8503B">⚠️ ค่าจากตำบลข้างเคียง (centroid ตกนอกเขต)</div>':''}
         <div class="pp-time">${p.pm_time||''}</div>
       `).addTo(map);
     });
@@ -138,7 +139,8 @@ async function fetchPoint(lat,lng){
     const dt = new Date(iso);
     t = dt.toLocaleString('th-TH',{timeZone:'Asia/Bangkok',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) + ' น.';
   }
-  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null};
+  const tb = d.loc && d.loc.tb_idn!=null ? String(d.loc.tb_idn) : null;
+  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null, tb_idn: tb};
 }
 
 async function loadPM(force){
@@ -156,7 +158,7 @@ async function loadPM(force){
   }
 
   const codes=Object.keys(centroids);
-  let done=0, fail=0;
+  let done=0, fail=0; const mismatches=[];
   pc.textContent=`0/${codes.length}`;
   const queue=[...codes];
   async function worker(){
@@ -164,7 +166,10 @@ async function loadPM(force){
       const code=queue.shift();
       const [lng,lat]=centroids[code];
       try{
-        pmData[code]=await fetchPoint(lat.toFixed(5),lng.toFixed(5));
+        const res=await fetchPoint(lat.toFixed(5),lng.toFixed(5));
+        res.mismatch = !!(res.tb_idn && res.tb_idn!==code);
+        if(res.mismatch) mismatches.push({expect:code, got:res.tb_idn});
+        pmData[code]=res;
       }catch(e){ fail++; }
       done++; pc.textContent=`${done}/${codes.length}`;
     }
@@ -175,6 +180,12 @@ async function loadPM(force){
   try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData})); }catch(e){}
   applyData(ts);
   prog.style.display='none'; btn.disabled=false;
+  if(mismatches.length){
+    console.warn('Tambon mismatch:', mismatches);
+    const el=document.getElementById('updated');
+    el.textContent += ` · ⚠️ ${mismatches.length} ตำบล centroid ตกนอกเขต`;
+    el.title = mismatches.map(m=>`คาด ${m.expect} ได้ ${m.got}`).join('\n');
+  }
   if(fail===codes.length){
     document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
   }
@@ -206,6 +217,7 @@ function applyData(ts){
     f.properties.pm25 = d?d.pm25:null;
     f.properties.pm_time = d?d.time:'';
     f.properties.avg24 = d&&d.avg24!=null?d.avg24:null;
+    f.properties.mismatch = d?!!d.mismatch:false;
     f.properties.level = levelOf(d?d.pm25:null)[0];
   });
   if(map.getSource('tambon')) map.getSource('tambon').setData(gj);
