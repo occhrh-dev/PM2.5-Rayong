@@ -156,11 +156,12 @@ async function loadPM(force){
   prog.style.display='block';
 
   // cache
-  const cacheKey='pm25_rayong_cache';
+  const cacheKey='pm25_rayong_cache_v2';
   if(!force){
     try{
       const c=JSON.parse(localStorage.getItem(cacheKey));
-      if(c && Date.now()-c.ts < CACHE_MIN*60*1000){ pmData=c.data; amphoeData=c.amphoe||null; applyData(c.ts); renderAmphoe(); btn.disabled=false; prog.style.display='none'; return; }
+      const firstD=c&&c.data&&Object.values(c.data)[0];
+      if(c && firstD && Array.isArray(firstD.hist) && Date.now()-c.ts < CACHE_MIN*60*1000){ pmData=c.data; amphoeData=c.amphoe||null; applyData(c.ts); renderAmphoe(); btn.disabled=false; prog.style.display='none'; return; }
     }catch(e){}
   }
 
