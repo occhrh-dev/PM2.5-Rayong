@@ -40,6 +40,7 @@
   <span class="sub">รายตำบล · ข้อมูล GISTDA</span>
   <span id="updated">กำลังโหลด…</span>
   <button id="refreshBtn" onclick="loadPM(true)">รีเฟรช</button>
+  <button id="baseBtn" onclick="toggleBase()" style="background:#5a7d9a;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer">🛰️ ดาวเทียม</button>
 </header>
 <div id="map"></div>
 <div id="progress">กำลังดึงข้อมูลฝุ่น… <span id="pcount"></span></div>
@@ -73,7 +74,7 @@ function levelOf(v){
   return ['vunh','มีผลต่อสุขภาพ'];
 }
 
-let map, gj, centroids={}, pmData={}; // pmData[tam_code] = {pm25, time}
+let map, gj, centroids={}, pmData={}, STYLES, curBase='streets'; // pmData[tam_code] = {pm25, time}
 
 function centroid(f){
   const g=f.geometry;
@@ -86,22 +87,18 @@ async function init(){
   gj = await (await fetch('rayong_tambon.geojson')).json();
   gj.features.forEach(f=>{ centroids[f.properties.tam_code]=centroid(f); f.properties.pm25=null; f.properties.level='nodata'; });
 
+  STYLES = {
+    streets:`https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
+    sat:`https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_KEY}`
+  };
   map = new maplibregl.Map({
-    container:'map',
-    style:`https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
+    container:'map', style:STYLES.streets,
     center:[101.35,12.85], zoom:9.3
   });
   map.addControl(new maplibregl.NavigationControl());
 
   map.on('load',()=>{
-    map.addSource('tambon',{type:'geojson',data:gj});
-    map.addLayer({id:'tambon-fill',type:'fill',source:'tambon',paint:{
-      'fill-color':['match',['get','level'],
-        'vgood',COLORS.vgood,'good',COLORS.good,'mod',COLORS.mod,
-        'unh',COLORS.unh,'vunh',COLORS.vunh,COLORS.nodata],
-      'fill-opacity':0.55
-    }});
-    map.addLayer({id:'tambon-line',type:'line',source:'tambon',paint:{'line-color':'#16324a','line-width':0.8,'line-opacity':0.6}});
+    addTambonLayers();
 
     map.on('click','tambon-fill',e=>{
       const p=e.features[0].properties;
@@ -112,6 +109,7 @@ async function init(){
         <span class="pp-val" style="color:${COLORS[lv]}">${p.pm25!=null&&p.pm25!==''?(+p.pm25).toFixed(1):'–'}</span>
         <span class="pp-unit"> µg/m³</span><br>
         <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
+        ${p.avg24!=null&&p.avg24!==''?`<div class="pp-unit" style="margin-top:4px">เฉลี่ย 24 ชม.: ${(+p.avg24).toFixed(1)} µg/m³</div>`:''}
         <div class="pp-time">${p.pm_time||''}</div>
       `).addTo(map);
     });
@@ -130,11 +128,17 @@ async function fetchPoint(lat,lng){
   const r = await fetch(url);
   if(!r.ok) throw new Error('HTTP '+r.status);
   const j = await r.json();
-  // โครงสร้าง GISTDA: ปรับ path ตาม JSON จริง — รองรับหลายรูปแบบ
   const d = j.data ?? j;
-  const pm = d.pm25 ?? d.PM25 ?? d.pm2_5 ?? (Array.isArray(d.pm25Data)?d.pm25Data[0]:null) ?? d.value ?? null;
-  const t = d.datetimeThai ?? d.time ?? d.datetime ?? '';
-  return {pm25: pm!=null?+pm:null, time:t};
+  const pm = d.pm25 ?? null;
+  // dt ใน graphHistory24hrs เป็น UTC → แปลงเป็นเวลาไทย (+7)
+  let t = '';
+  const hist = d.graphHistory24hrs;
+  if(Array.isArray(hist) && hist.length){
+    const iso = hist[hist.length-1][1];
+    const dt = new Date(iso);
+    t = dt.toLocaleString('th-TH',{timeZone:'Asia/Bangkok',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) + ' น.';
+  }
+  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null};
 }
 
 async function loadPM(force){
@@ -176,11 +180,32 @@ async function loadPM(force){
   }
 }
 
+function addTambonLayers(){
+  if(map.getSource('tambon')) return;
+  map.addSource('tambon',{type:'geojson',data:gj});
+  map.addLayer({id:'tambon-fill',type:'fill',source:'tambon',paint:{
+    'fill-color':['match',['get','level'],
+      'vgood',COLORS.vgood,'good',COLORS.good,'mod',COLORS.mod,
+      'unh',COLORS.unh,'vunh',COLORS.vunh,COLORS.nodata],
+    'fill-opacity':curBase==='sat'?0.62:0.55
+  }});
+  map.addLayer({id:'tambon-line',type:'line',source:'tambon',paint:{
+    'line-color':curBase==='sat'?'#ffffff':'#16324a','line-width':0.8,'line-opacity':0.7}});
+}
+
+function toggleBase(){
+  curBase = curBase==='streets'?'sat':'streets';
+  document.getElementById('baseBtn').textContent = curBase==='streets'?'🛰️ ดาวเทียม':'🗺️ แผนที่ถนน';
+  map.setStyle(STYLES[curBase]);
+  map.once('styledata',()=>{ addTambonLayers(); });
+}
+
 function applyData(ts){
   gj.features.forEach(f=>{
     const d=pmData[f.properties.tam_code];
     f.properties.pm25 = d?d.pm25:null;
     f.properties.pm_time = d?d.time:'';
+    f.properties.avg24 = d&&d.avg24!=null?d.avg24:null;
     f.properties.level = levelOf(d?d.pm25:null)[0];
   });
   if(map.getSource('tambon')) map.getSource('tambon').setData(gj);
