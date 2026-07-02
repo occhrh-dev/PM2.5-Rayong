@@ -49,6 +49,9 @@
   .pp-unit{font-size:12px;color:#666}
   .pp-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;color:#fff;margin-top:4px}
   .pp-time{font-size:11px;color:#999;margin-top:6px}
+  .maplibregl-popup-close-button{font-size:24px;width:34px;height:34px;line-height:34px;border-radius:50%}
+  .maplibregl-popup-close-button:hover{background:#eee}
+  .maplibregl-popup-content{padding-right:30px}
   .ptab{border:1px solid #d5dde3;background:#fff;border-radius:12px;padding:2px 12px;font-size:11px;cursor:pointer;color:#666;font-family:'Sarabun',sans-serif}
   .ptab.active{background:#16324a;color:#fff;border-color:#16324a}
 </style>
@@ -102,7 +105,7 @@ function levelOf(v){
   return ['vunh','มีผลต่อสุขภาพ'];
 }
 
-let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null, stnMarkers=[], stnOn=false; // pmData[tam_code] = {pm25, time}
+let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null, stnMarkers=[], stnOn=false, altPoints={}, ptOverride={}; // pmData[tam_code] = {pm25, time}
 
 function centroid(f){
   const g=f.geometry;
@@ -112,9 +115,11 @@ function centroid(f){
 }
 
 async function init(){
-  const [gjr, cr] = await Promise.all([fetch('rayong_tambon.geojson'), fetch('data/centroids.json')]);
+  const [gjr, cr, ar] = await Promise.all([fetch('rayong_tambon.geojson'), fetch('data/centroids.json'), fetch('data/alt_points.json')]);
   gj = await gjr.json();
   const pre = cr.ok ? await cr.json() : {};
+  altPoints = ar.ok ? await ar.json() : {};
+  try{ ptOverride = JSON.parse(localStorage.getItem('pt_override_v1')||'{}'); }catch(e){ ptOverride={}; }
   gj.features.forEach(f=>{
     const c=f.properties.tam_code;
     centroids[c] = pre[c] || centroid(f); // ใช้จุด polylabel จากไฟล์ ถ้าไม่มีค่อยคำนวณ
@@ -213,13 +218,25 @@ async function loadPM(force){
   async function worker(){
     while(queue.length){
       const code=queue.shift();
-      const [lng,lat]=centroids[code];
+      // ลำดับจุด: จุดที่เคยใช้ได้ → จุดหลัก → จุดสำรอง (ลึกขึ้นเรื่อย ๆ)
+      const cands=[];
+      if(ptOverride[code]) cands.push(ptOverride[code]);
+      cands.push(centroids[code], ...(altPoints[code]||[]));
+      let res=null;
       try{
-        const res=await fetchPoint(lat.toFixed(5),lng.toFixed(5));
+        for(const pt of cands){
+          const r=await fetchPoint(pt[1].toFixed(5),pt[0].toFixed(5));
+          if(!r.tb_idn || r.tb_idn===code){
+            res=r;
+            if(String(pt)!==String(centroids[code])){ ptOverride[code]=pt; }
+            break;
+          }
+          res=r; // เก็บตัวสุดท้ายไว้ใช้ถ้าไม่ตรงสักจุด
+        }
         res.mismatch = !!(res.tb_idn && res.tb_idn!==code);
         if(res.mismatch) mismatches.push({expect:code, got:res.tb_idn});
         pmData[code]=res;
-      }catch(e){ fail++; }
+      }catch(e){ if(res){pmData[code]=res;} else fail++; }
       done++; pc.textContent=`${done}/${codes.length}`;
     }
   }
@@ -227,6 +244,7 @@ async function loadPM(force){
 
   const ts=Date.now();
   try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData,amphoe:amphoeData})); }catch(e){}
+  try{ localStorage.setItem('pt_override_v1',JSON.stringify(ptOverride)); }catch(e){}
   applyData(ts); renderAmphoe();
   prog.style.display='none'; btn.disabled=false;
   if(mismatches.length){
@@ -336,7 +354,6 @@ async function toggleStations(){
     const el=document.createElement('div');
     el.style.cssText=`width:34px;height:34px;border-radius:50%;background:${COLORS[lv]};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font:700 11px Sarabun,sans-serif;color:#fff;cursor:pointer`;
     el.textContent = s.pm25!=null ? Math.round(s.pm25) : '–';
-    el.addEventListener('click',ev=>ev.stopPropagation());
     const popup=new maplibregl.Popup({offset:20,maxWidth:'280px'}).setHTML(`
       <div class="pp-name">📍 ${s.name||s.id}</div>
       <div class="pp-amp">สถานีวัดจริง กรมควบคุมมลพิษ (Air4Thai)</div>
@@ -347,7 +364,12 @@ async function toggleStations(){
       </div>
       ${s.aqi!=null?`<div class="pp-unit" style="margin-top:2px">AQI ${s.aqi}</div>`:''}
       <div class="pp-time">${s.date||''} ${s.time||''}</div>`);
-    stnMarkers.push(new maplibregl.Marker({element:el}).setLngLat([s.lng,s.lat]).setPopup(popup).addTo(map));
+    const mk=new maplibregl.Marker({element:el}).setLngLat([s.lng,s.lat]).addTo(map);
+    el.addEventListener('click',ev=>{
+      ev.stopPropagation();
+      popup.setLngLat([s.lng,s.lat]).addTo(map);
+    });
+    stnMarkers.push(mk);
   });
   stnOn=true;
   btn.style.background='#16324a'; btn.textContent='📍 ซ่อนสถานี';
