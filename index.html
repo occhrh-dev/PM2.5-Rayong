@@ -43,6 +43,7 @@
   <span class="sub">รายตำบล · ข้อมูล GISTDA</span>
   <span id="updated">กำลังโหลด…</span>
   <button id="refreshBtn" onclick="loadPM(true)">รีเฟรช</button>
+  <button id="stnBtn" onclick="toggleStations()" style="background:#0E7C7B;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer">📍 สถานีวัดจริง</button>
   <button id="baseBtn" onclick="toggleBase()" style="background:#5a7d9a;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer">🛰️ ดาวเทียม</button>
 </header>
 <div id="map"></div>
@@ -83,7 +84,7 @@ function levelOf(v){
   return ['vunh','มีผลต่อสุขภาพ'];
 }
 
-let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null; // pmData[tam_code] = {pm25, time}
+let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null, stnMarkers=[], stnOn=false; // pmData[tam_code] = {pm25, time}
 
 function centroid(f){
   const g=f.geometry;
@@ -291,6 +292,40 @@ function dailyChart(code){
       <text x="${(x+bw/2).toFixed(1)}" y="${H-6}" font-size="8.5" text-anchor="middle" fill="#888">${thDay(r.date)}</text>`;
   }).join('');
   return `<svg width="${W}" height="${H}" style="display:block;margin-top:4px">${bars}</svg>`;
+}
+
+async function toggleStations(){
+  const btn=document.getElementById('stnBtn');
+  if(stnOn){
+    stnMarkers.forEach(m=>m.remove()); stnMarkers=[]; stnOn=false;
+    btn.style.background='#0E7C7B'; btn.textContent='📍 สถานีวัดจริง';
+    return;
+  }
+  let stations=[];
+  try{
+    const r=await fetch('data/air4thai.json?t='+Date.now());
+    if(r.ok) stations=await r.json();
+  }catch(e){}
+  if(!stations.length){ btn.textContent='📍 ไม่มีข้อมูลสถานี'; setTimeout(()=>btn.textContent='📍 สถานีวัดจริง',2500); return; }
+  stations.forEach(s=>{
+    const [lv,label]=levelOf(s.pm25);
+    const el=document.createElement('div');
+    el.style.cssText=`width:34px;height:34px;border-radius:50%;background:${COLORS[lv]};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font:700 11px Sarabun,sans-serif;color:#fff;cursor:pointer`;
+    el.textContent = s.pm25!=null ? Math.round(s.pm25) : '–';
+    const popup=new maplibregl.Popup({offset:20,maxWidth:'280px'}).setHTML(`
+      <div class="pp-name">📍 ${s.name||s.id}</div>
+      <div class="pp-amp">สถานีวัดจริง กรมควบคุมมลพิษ (Air4Thai)</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
+        <span class="pp-val" style="color:${COLORS[lv]}">${s.pm25!=null?s.pm25.toFixed(1):'–'}</span>
+        <span class="pp-unit">µg/m³</span>
+        <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
+      </div>
+      ${s.aqi!=null?`<div class="pp-unit" style="margin-top:2px">AQI ${s.aqi}</div>`:''}
+      <div class="pp-time">${s.date||''} ${s.time||''}</div>`);
+    stnMarkers.push(new maplibregl.Marker({element:el}).setLngLat([s.lng,s.lat]).setPopup(popup).addTo(map));
+  });
+  stnOn=true;
+  btn.style.background='#16324a'; btn.textContent='📍 ซ่อนสถานี';
 }
 
 function swTab(btn,id){
