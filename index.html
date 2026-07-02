@@ -132,12 +132,13 @@ async function init(){
           <span class="pp-unit">µg/m³</span>
           <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
         </div>
-        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${d.avg24!=null?d.avg24.toFixed(1):'–'} · ${(d.time||'').replace('วัน','').split(' ').slice(-2).join(' ')}</div>
+        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${d.avg24!=null?d.avg24.toFixed(1):'–'} µg/m³</div>
         ${eocStatusLine(p.tam_code)}
         ${tabs}
         <div id="pcDaily">${daily}</div>
         <div id="pcHourly" style="display:${daily?'none':'block'}">${hourly}</div>
         ${d.mismatch?'<div class="pp-time" style="color:#E8503B">⚠️ ค่าจากตำบลข้างเคียง</div>':''}
+        <div class="pp-time">${d.time||''}</div>
       `).addTo(map);
     });
     map.on('mouseenter','tambon-fill',()=>map.getCanvas().style.cursor='pointer');
