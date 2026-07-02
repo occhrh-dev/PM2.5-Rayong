@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PM2.5 ระยอง — ค่าฝุ่นรายตำบล Real-time</title>
+<meta name="theme-color" content="#16324a">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌫️</text></svg>">
 <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -20,7 +23,20 @@
   #updated{margin-left:auto;font-size:12px;background:rgba(255,255,255,.12);padding:4px 10px;border-radius:14px}
   #refreshBtn{background:#3BB3F4;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer}
   #refreshBtn:disabled{opacity:.5;cursor:wait}
-  #map{flex:1}
+  #mapwrap{flex:1;position:relative}
+  #map{position:absolute;inset:0}
+  @media (max-width:640px){
+    header{padding:6px 10px;gap:6px}
+    header h1{font-size:14px}
+    header .sub{display:none}
+    #updated{font-size:10px;padding:3px 8px}
+    #refreshBtn,#baseBtn,#stnBtn{font-size:11px;padding:4px 10px}
+    .legend{font-size:10px;padding:6px 8px;bottom:12px}
+    .legend b{font-size:11px;margin-bottom:3px}
+    .swatch{width:11px;height:11px}
+    #ampPanel{min-width:140px;font-size:11px;padding:6px 8px;max-width:46%}
+    .maplibregl-popup-content{min-width:230px;max-width:78vw}
+  }
   .legend{position:absolute;bottom:24px;left:12px;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.2);padding:10px 12px;font-size:12px;z-index:5}
   .legend b{display:block;margin-bottom:6px;font-size:13px}
   .lrow{display:flex;align-items:center;gap:7px;margin:3px 0}
@@ -46,6 +62,7 @@
   <button id="stnBtn" onclick="toggleStations()" style="background:#0E7C7B;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer">📍 สถานีวัดจริง</button>
   <button id="baseBtn" onclick="toggleBase()" style="background:#5a7d9a;border:none;color:#fff;padding:5px 14px;border-radius:14px;font-size:13px;cursor:pointer">🛰️ ดาวเทียม</button>
 </header>
+<div id="mapwrap">
 <div id="map"></div>
 <div id="progress">กำลังดึงข้อมูลฝุ่น… <span id="pcount"></span></div>
 <div id="ampPanel" style="position:absolute;top:12px;right:12px;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.2);padding:10px 12px;font-size:12px;z-index:5;min-width:180px;display:none">
@@ -60,6 +77,7 @@
   <div class="lrow"><span class="swatch" style="background:var(--c-unh)"></span>37.6 – 75 เริ่มมีผลต่อสุขภาพ</div>
   <div class="lrow"><span class="swatch" style="background:var(--c-vunh)"></span>&gt; 75 มีผลต่อสุขภาพ</div>
   <div class="lrow"><span class="swatch" style="background:var(--c-nodata)"></span>ไม่มีข้อมูล</div>
+</div>
 </div>
 <script>
 // ================= CONFIG =================
@@ -214,8 +232,14 @@ async function loadPM(force){
   if(mismatches.length){
     console.warn('Tambon mismatch:', mismatches);
     const el=document.getElementById('updated');
-    el.textContent += ` · ⚠️ ${mismatches.length} ตำบล centroid ตกนอกเขต`;
-    el.title = mismatches.map(m=>`คาด ${m.expect} ได้ ${m.got}`).join('\n');
+    el.textContent += ` · ⚠️ ${mismatches.length} ตำบลตกขอบเขต (แตะดู)`;
+    const detail = mismatches.map(m=>{
+      const f=gj.features.find(f=>f.properties.tam_code===m.expect);
+      return `ต.${f?f.properties.tam_th:m.expect} (คาด ${m.expect} ได้ ${m.got})`;
+    }).join('\n');
+    el.title = detail;
+    el.style.cursor='pointer';
+    el.onclick = ()=>alert('จุดเก็บค่าตกนอกเขตตาม GISTDA:\n'+detail+'\n\nค่าที่แสดงเป็นของพื้นที่ข้างเคียง (มักต่างกันน้อยมาก)');
   }
   if(fail===codes.length){
     document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
@@ -262,7 +286,7 @@ function renderEocBanner(){
   if(!el){
     el=document.createElement('div'); el.id='eocBanner';
     el.style.cssText='position:absolute;top:12px;left:50%;transform:translateX(-50%);max-width:80%;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.3);padding:8px 16px;font-size:13px;z-index:7;font-weight:600';
-    document.body.appendChild(el);
+    document.getElementById('mapwrap').appendChild(el);
   }
   if(eoc.length){
     el.style.background='#E8503B'; el.style.color='#fff'; el.style.display='block';
@@ -312,6 +336,7 @@ async function toggleStations(){
     const el=document.createElement('div');
     el.style.cssText=`width:34px;height:34px;border-radius:50%;background:${COLORS[lv]};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font:700 11px Sarabun,sans-serif;color:#fff;cursor:pointer`;
     el.textContent = s.pm25!=null ? Math.round(s.pm25) : '–';
+    el.addEventListener('click',ev=>ev.stopPropagation());
     const popup=new maplibregl.Popup({offset:20,maxWidth:'280px'}).setHTML(`
       <div class="pp-name">📍 ${s.name||s.id}</div>
       <div class="pp-amp">สถานีวัดจริง กรมควบคุมมลพิษ (Air4Thai)</div>
@@ -415,7 +440,10 @@ function renderAmphoe(){
       <span style="flex:1">${a.ap_tn}</span>
       <b>${(+a.pm25).toFixed(1)}</b></div>`;
   }).join('');
-  document.getElementById('ampPanel').style.display='block';
+  const panel=document.getElementById('ampPanel');
+  if(window.innerWidth<640 && panel.style.display==='none')
+    document.getElementById('ampList').style.display='none';
+  panel.style.display='block';
 }
 
 function applyData(ts){
@@ -432,6 +460,7 @@ function applyData(ts){
 }
 
 init();
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 </script>
 </body>
 </html>
