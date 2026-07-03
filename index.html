@@ -95,6 +95,15 @@ const CACHE_MIN = 50;          // ใช้ cache ถ้าอายุไม่
 const CONCURRENCY = 6;
 // ==========================================
 
+function gistdaDate(iso){
+  // GISTDA timestamps are Thai local time, even when the string ends with "Z".
+  return new Date(String(iso).replace(/Z$/,''));
+}
+
+function formatGistdaThaiDateTime(iso){
+  return gistdaDate(iso).toLocaleString('th-TH',{weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) + ' น.';
+}
+
 const COLORS = {vgood:'#3BB3F4',good:'#3BC66E',mod:'#F4D23B',unh:'#F49C3B',vunh:'#E8503B',nodata:'#B8C2CC'};
 function levelOf(v){
   if(v==null||isNaN(v)) return ['nodata','ไม่มีข้อมูล'];
@@ -184,13 +193,11 @@ async function fetchPoint(lat,lng){
   const j = await r.json();
   const d = j.data ?? j;
   const pm = d.pm25 ?? null;
-  // dt ใน graphHistory24hrs เป็น UTC → แปลงเป็นเวลาไทย (+7)
   let t = '';
   const hist = d.graphHistory24hrs;
   if(Array.isArray(hist) && hist.length){
     const iso = hist[hist.length-1][1];
-    const dt = new Date(iso);
-    t = dt.toLocaleString('th-TH',{timeZone:'Asia/Bangkok',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) + ' น.';
+    t = formatGistdaThaiDateTime(iso);
   }
   const tb = d.loc && d.loc.tb_idn!=null ? String(d.loc.tb_idn) : null;
   if(Array.isArray(d.pm25_amphoe) && d.pm25_amphoe.length) amphoeData = d.pm25_amphoe;
@@ -423,7 +430,7 @@ function sparkline(hist){
   const X=i=>PL+i*(W-PL-PR)/(vals.length-1);
   const Y=v=>PT+(H-PT-PB)-(v-mn)/rng*(H-PT-PB);
   const pts=vals.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
-  const thTime=iso=>new Date(iso).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'numeric'});
+  const thTime=iso=>gistdaDate(iso).toLocaleTimeString('th-TH',{hour:'numeric'});
   // ตัวเลขค่าทุกจุด (สลับบน-ล่างกันทับ)
   const valLabels=vals.map((v,i)=>{
     const above=(i%2===0);

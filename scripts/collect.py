@@ -22,7 +22,8 @@ def fetch(code):
     return code, []
 
 def thai_parts(iso):
-    t = datetime.datetime.fromisoformat(iso.replace('Z','+00:00')) + datetime.timedelta(hours=7)
+    # GISTDA labels graph timestamps with "Z", but the hour is already Thai local time.
+    t = datetime.datetime.fromisoformat(iso.replace('Z',''))
     return t.strftime('%Y-%m-%d'), t.strftime('%H')
 
 def main():
@@ -33,10 +34,17 @@ def main():
             for val, iso in hist:
                 d, h = thai_parts(iso)
                 merged.setdefault(d, {}).setdefault(code, {})[h] = round(float(val), 2)
+    latest_hour = {
+        d: max(int(h) for hours in codes.values() for h in hours)
+        for d, codes in merged.items()
+    }
 
     for d, codes in merged.items():
         path = f"{HOURLY_DIR}/{d}.json"
         existing = json.load(open(path)) if os.path.exists(path) else {}
+        if d in latest_hour:
+            for code, hours in existing.items():
+                existing[code] = {h: v for h, v in hours.items() if int(h) <= latest_hour[d]}
         for code, hours in codes.items():
             existing.setdefault(code, {}).update(hours)
         json.dump(existing, open(path, 'w'), separators=(',',':'))
