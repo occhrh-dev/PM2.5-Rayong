@@ -210,7 +210,7 @@ async function loadPM(force){
   prog.style.display='block';
 
   // cache
-  const cacheKey='pm25_rayong_cache_v2';
+  const cacheKey='pm25_rayong_cache_v3';
   if(!force){
     try{
       const c=JSON.parse(localStorage.getItem(cacheKey));
@@ -315,7 +315,7 @@ function streakOf(code, threshold){
   let s=0;
   for(let i=dailyData.length-1;i>=0;i--){
     const d=dailyData[i].data&&dailyData[i].data[code];
-    if(d&&d.avg!=null&&d.avg>threshold) s++; else break;
+    if(d&&d.avg!=null&&(d.hours==null||d.hours>=3)&&d.avg>threshold) s++; else break;
   }
   return s;
 }
@@ -352,7 +352,7 @@ function renderEocBanner(){
 function dailyChart(code){
   if(!dailyData||!dailyData.length) return '';
   const rows=dailyData.map(d=>({date:d.date, avg:d.data&&d.data[code]?d.data[code].avg:null, hours:d.data&&d.data[code]?d.data[code].hours:0}))
-                      .filter(r=>r.avg!=null);
+                      .filter(r=>r.avg!=null && (r.hours==null || r.hours>=3));
   if(!rows.length) return '';
   const W=250,H=80,PL=8,PR=8,PT=14,PB=18,slot=(W-PL-PR)/Math.max(rows.length,7);
   const mx=Math.max(...rows.map(r=>r.avg),1);
