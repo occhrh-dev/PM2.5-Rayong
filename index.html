@@ -170,6 +170,7 @@ async function init(){
 
     loadPM(false);
     loadDaily();
+    loadForecast();
     setInterval(()=>loadPM(true), REFRESH_MIN*60*1000);
   });
 }
@@ -262,6 +263,30 @@ async function loadPM(force){
   if(fail===codes.length){
     document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
   }
+}
+
+async function loadForecast(){
+  try{
+    const r=await fetch('https://pm25.gistda.or.th/rest/getPm25byProvincePred3');
+    const j=await r.json();
+    const ry=(j.data||[]).find(p=>p.pv_idn===21);
+    if(!ry) return;
+    const preds=[ry.pred1,ry.pred2,ry.pred3].map(v=>+v);
+    const now=+ry.pm25;
+    const trend = preds[2]>now+1 ? '↗' : preds[2]<now-1 ? '↘' : '→';
+    const worst=Math.max(...preds);
+    const [lv]=levelOf(worst);
+    let warn='';
+    if(worst>WATCH_THRESHOLD) warn=`<div style="color:${worst>EOC_THRESHOLD?'#E8503B':'#F49C3B'};font-weight:600;margin-top:2px">⚠️ คาดการณ์แตะระดับ${worst>EOC_THRESHOLD?'มีผลต่อสุขภาพ':'เฝ้าระวัง'}</div>`;
+    const el=document.createElement('div');
+    el.style.cssText='border-top:1px solid #eee;margin-top:6px;padding-top:6px;font-size:12px';
+    el.innerHTML=`<b style="font-size:12px">คาดการณ์ (จังหวัด) ${trend}</b>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:3px">
+        ${preds.map((v,i)=>`<span style="background:${COLORS[levelOf(v)[0]]};color:#fff;border-radius:10px;padding:1px 8px;font-weight:600">${v.toFixed(1)}</span>${i<2?'<span style="color:#bbb">→</span>':''}`).join('')}
+      </div>${warn}`;
+    document.getElementById('ampPanel').appendChild(el);
+    document.getElementById('ampPanel').style.display='block';
+  }catch(e){ console.warn('forecast unavailable', e); }
 }
 
 async function loadDaily(){
