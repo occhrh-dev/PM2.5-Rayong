@@ -1,5 +1,5 @@
 // PM2.5 @RY service worker
-const VERSION='v2';
+const VERSION='v3';
 const CORE=['./','index.html','rayong_tambon.geojson','data/centroids.json','manifest.json'];
 
 self.addEventListener('install',e=>{
