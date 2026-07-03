@@ -161,11 +161,11 @@ async function init(){
       new maplibregl.Popup({maxWidth:'300px'}).setLngLat(e.lngLat).setHTML(`
         <div class="pp-name">ต.${p.tam_th} <span class="pp-amp">· ${p.amp_th}</span></div>
         <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
-          <span class="pp-val" style="color:${COLORS[lv]}">${d.pm25!=null?d.pm25.toFixed(1):'–'}</span>
+          <span class="pp-val" style="color:${COLORS[lv]}">${d.pm25!=null?Math.round(d.pm25):'–'}</span>
           <span class="pp-unit">µg/m³</span>
           <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
         </div>
-        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${d.avg24!=null?d.avg24.toFixed(1):'–'} µg/m³</div>
+        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${d.avg24!=null?Math.round(d.avg24):'–'} µg/m³</div>
         ${eocStatusLine(p.tam_code)}
         ${tabs}
         <div id="pcDaily">${daily}</div>
@@ -289,7 +289,7 @@ async function loadForecast(){
     el.style.cssText='border-top:1px solid #eee;margin-top:6px;padding-top:6px;font-size:12px';
     el.innerHTML=`<b style="font-size:12px">คาดการณ์ (จังหวัด) ${trend}</b>
       <div style="display:flex;gap:6px;align-items:center;margin-top:3px">
-        ${preds.map((v,i)=>`<span style="background:${COLORS[levelOf(v)[0]]};color:#fff;border-radius:10px;padding:1px 8px;font-weight:600">${v.toFixed(1)}</span>${i<2?'<span style="color:#bbb">→</span>':''}`).join('')}
+        ${preds.map((v,i)=>`<span style="background:${COLORS[levelOf(v)[0]]};color:#fff;border-radius:10px;padding:1px 8px;font-weight:600">${Math.round(v)}</span>${i<2?'<span style="color:#bbb">→</span>':''}`).join('')}
       </div>${warn}`;
     document.getElementById('ampPanel').appendChild(el);
     document.getElementById('ampPanel').style.display='block';
@@ -390,7 +390,7 @@ async function toggleStations(){
       <div class="pp-name">📍 ${s.name||s.id}</div>
       <div class="pp-amp">สถานีวัดจริง กรมควบคุมมลพิษ (Air4Thai)</div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
-        <span class="pp-val" style="color:${COLORS[lv]}">${s.pm25!=null?s.pm25.toFixed(1):'–'}</span>
+        <span class="pp-val" style="color:${COLORS[lv]}">${s.pm25!=null?Math.round(s.pm25):'–'}</span>
         <span class="pp-unit">µg/m³</span>
         <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
       </div>
@@ -492,7 +492,7 @@ function renderAmphoe(){
       <span style="width:14px;color:#999">${i+1}</span>
       <span style="width:10px;height:10px;border-radius:50%;background:${COLORS[lv]};flex:none"></span>
       <span style="flex:1">${a.ap_tn}</span>
-      <b>${(+a.pm25).toFixed(1)}</b></div>`;
+      <b>${Math.round(+a.pm25)}</b></div>`;
   }).join('');
   const panel=document.getElementById('ampPanel');
   if(window.innerWidth<640 && panel.style.display==='none')
