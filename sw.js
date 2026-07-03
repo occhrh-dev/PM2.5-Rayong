@@ -1,5 +1,5 @@
 // PM2.5 @RY service worker
-const VERSION='v3';
+const VERSION='v4';
 const CORE=['./','index.html','rayong_tambon.geojson','data/centroids.json','manifest.json'];
 
 self.addEventListener('install',e=>{
@@ -13,8 +13,8 @@ self.addEventListener('activate',e=>{
 self.addEventListener('fetch',e=>{
   const url=new URL(e.request.url);
   if(url.origin!==location.origin) return; // GISTDA/MapTiler ผ่านตรง ไม่ cache
-  if(url.pathname.includes('/data/')){
-    // ข้อมูลฝุ่น: network-first, ออฟไลน์ค่อยใช้ cache
+  if(url.pathname.includes('/data/') || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html')){
+    // ข้อมูลฝุ่นและหน้าแรก: network-first, ออฟไลน์ค่อยใช้ cache
     e.respondWith(fetch(e.request).then(r=>{
       const cp=r.clone(); caches.open(VERSION).then(c=>c.put(e.request,cp)); return r;
     }).catch(()=>caches.match(e.request)));
