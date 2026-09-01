@@ -89,6 +89,9 @@ const MAPTILER_KEY = 'XOw46Ht6gxyHhSCkLXPf';
 // GISTDA endpoint (แอปเช็คฝุ่นใช้) — ถ้าโดน CORS ให้ตั้ง PROXY_URL เป็น Cloudflare Worker
 const GISTDA_URL = (lat,lng)=>`https://pm25.gistda.or.th/rest/getPm25byLocation?lat=${lat}&lng=${lng}`;
 const PROXY_URL = ''; // ex: 'https://pm25-proxy.xxx.workers.dev/?lat={lat}&lng={lng}'
+// สถานี Air4Thai ดึงสดผ่าน Worker; data/air4thai.json ใช้เฉพาะเมื่อปลายทางสดล่ม
+const AIR4THAI_LIVE_URL = 'https://pm25-rayong-air4thai.occ-hrh.workers.dev/';
+const AIR4THAI_REFRESH_MIN = 10;
 // ประวัติรายวันเก็บโดย GitHub Actions ลงไฟล์ static ใน repo
 const DAILY_URL = 'data/daily.json';
 const REFRESH_MIN = 60;        // auto refresh ทุก 60 นาที
@@ -182,6 +185,7 @@ async function init(){
     loadDaily();
     loadForecast();
     setInterval(()=>loadPM(true), REFRESH_MIN*60*1000);
+    setInterval(()=>{ if(stnOn) refreshStations(); }, AIR4THAI_REFRESH_MIN*60*1000);
   });
 }
 
@@ -369,34 +373,54 @@ function dailyChart(code){
   return `<svg width="${W}" height="${H}" style="display:block;margin-top:4px">${bars}</svg>`;
 }
 
-async function toggleStations(){
-  const btn=document.getElementById('stnBtn');
-  if(stnOn){
-    stnMarkers.forEach(m=>m.remove()); stnMarkers=[]; stnOn=false;
-    btn.style.background='#0E7C7B'; btn.textContent='📍 สถานีวัดจริง';
-    return;
-  }
-  let stations=[];
+async function fetchAir4ThaiStations(){
   try{
-    const r=await fetch('data/air4thai.json?t='+Date.now());
-    if(r.ok) stations=await r.json();
-  }catch(e){}
-  if(!stations.length){ btn.textContent='📍 ไม่มีข้อมูลสถานี'; setTimeout(()=>btn.textContent='📍 สถานีวัดจริง',2500); return; }
+    const r=await fetch(AIR4THAI_LIVE_URL+'?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const payload=await r.json();
+    const stations=Array.isArray(payload)?payload:payload.stations;
+    if(Array.isArray(stations)&&stations.length) return {stations,live:true};
+  }catch(e){ console.warn('Air4Thai live unavailable; using repository backup',e); }
+
+  try{
+    const r=await fetch('data/air4thai.json?t='+Date.now(),{cache:'no-store'});
+    if(r.ok){
+      const stations=await r.json();
+      if(Array.isArray(stations)&&stations.length) return {stations,live:false};
+    }
+  }catch(e){ console.warn('Air4Thai backup unavailable',e); }
+  return {stations:[],live:false};
+}
+
+function clearStationMarkers(){
+  stnMarkers.forEach(m=>m.remove());
+  stnMarkers=[];
+}
+
+function formatStationPm25(value){
+  const n=Number(value);
+  return Number.isFinite(n)&&n>=0?n.toFixed(1):'–';
+}
+
+function renderStationMarkers(stations,live){
+  clearStationMarkers();
   stations.forEach(s=>{
     const [lv,label]=levelOf(s.pm25);
     const el=document.createElement('div');
     el.style.cssText=`width:34px;height:34px;border-radius:50%;background:${COLORS[lv]};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font:700 11px Sarabun,sans-serif;color:#fff;cursor:pointer`;
-    el.textContent = s.pm25!=null ? Math.round(s.pm25) : '–';
+    el.textContent = formatStationPm25(s.pm25);
     const popup=new maplibregl.Popup({offset:20,maxWidth:'280px'}).setHTML(`
       <div class="pp-name">📍 ${s.name||s.id}</div>
       <div class="pp-amp">สถานีวัดจริง กรมควบคุมมลพิษ (Air4Thai)</div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
-        <span class="pp-val" style="color:${COLORS[lv]}">${s.pm25!=null?Math.round(s.pm25):'–'}</span>
+        <span class="pp-val" style="color:${COLORS[lv]}">${formatStationPm25(s.pm25)}</span>
         <span class="pp-unit">µg/m³</span>
         <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
       </div>
+      <div class="pp-unit" style="margin-top:2px">ค่าเฉลี่ย 24 ชั่วโมง</div>
       ${s.aqi!=null?`<div class="pp-unit" style="margin-top:2px">AQI ${s.aqi}</div>`:''}
-      <div class="pp-time">${s.date||''} ${s.time||''}</div>`);
+      <div class="pp-time">ข้อมูล Air4Thai: ${s.date||''} ${s.time||''}</div>
+      ${live?'':'<div class="pp-time" style="color:#E8503B">⚠️ ข้อมูลสำรอง — ปลายทางสดติดต่อไม่ได้</div>'}`);
     const mk=new maplibregl.Marker({element:el}).setLngLat([s.lng,s.lat]).addTo(map);
     el.addEventListener('click',ev=>{
       ev.stopPropagation();
@@ -404,8 +428,33 @@ async function toggleStations(){
     });
     stnMarkers.push(mk);
   });
+}
+
+async function refreshStations(){
+  const btn=document.getElementById('stnBtn');
+  btn.disabled=true; btn.textContent='📍 กำลังดึง Air4Thai…';
+  const {stations,live}=await fetchAir4ThaiStations();
+  btn.disabled=false;
+  if(!stations.length){
+    btn.textContent='📍 ไม่มีข้อมูลสถานี';
+    btn.style.background='#E8503B';
+    return false;
+  }
+  renderStationMarkers(stations,live);
   stnOn=true;
-  btn.style.background='#16324a'; btn.textContent='📍 ซ่อนสถานี';
+  btn.style.background=live?'#16324a':'#F49C3B';
+  btn.textContent=live?'📍 ซ่อนสถานี · ข้อมูลสด':'📍 ซ่อนสถานี · ข้อมูลสำรอง';
+  return true;
+}
+
+async function toggleStations(){
+  const btn=document.getElementById('stnBtn');
+  if(stnOn){
+    clearStationMarkers(); stnOn=false;
+    btn.style.background='#0E7C7B'; btn.textContent='📍 สถานีวัดจริง';
+    return;
+  }
+  await refreshStations();
 }
 
 function swTab(btn,id){
