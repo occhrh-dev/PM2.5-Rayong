@@ -86,9 +86,9 @@
 <script>
 // ================= CONFIG =================
 const MAPTILER_KEY = 'XOw46Ht6gxyHhSCkLXPf';
-// GISTDA endpoint (แอปเช็คฝุ่นใช้) — ถ้าโดน CORS ให้ตั้ง PROXY_URL เป็น Cloudflare Worker
-const GISTDA_URL = (lat,lng)=>`https://pm25.gistda.or.th/rest/getPm25byLocation?lat=${lat}&lng=${lng}`;
-const PROXY_URL = ''; // ex: 'https://pm25-proxy.xxx.workers.dev/?lat={lat}&lng={lng}'
+// API รายตำบลเดียวกับที่หน้าเว็บเช็คฝุ่นใช้เมื่อค้นหาด้วยชื่อตำบล
+const GISTDA_TAMBON_URL = code=>`https://pm25.gistda.or.th/rest/getPM25byTambon24hrs?tb_idn=${code}`;
+const GISTDA_AMPHOE_URL = 'https://pm25.gistda.or.th/rest/getPm25byAmphoePred3?pv_idn=21';
 // สถานี Air4Thai ดึงสดผ่าน Worker; data/air4thai.json ใช้เฉพาะเมื่อปลายทางสดล่ม
 const AIR4THAI_LIVE_URL = 'https://pm25-rayong-air4thai.occ-hrh.workers.dev/';
 const AIR4THAI_REFRESH_MIN = 10;
@@ -118,7 +118,12 @@ function levelOf(v){
   return ['vunh','มีผลต่อสุขภาพ'];
 }
 
-let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null, stnMarkers=[], stnOn=false, altPoints={}, ptOverride={}; // pmData[tam_code] = {pm25, time}
+function formatGistdaPm25(value){
+  const n=Number(value);
+  return Number.isFinite(n)&&n>=0?String(Number(n.toFixed(1))):'–';
+}
+
+let map, gj, centroids={}, pmData={}, STYLES, curBase='streets', amphoeData=null, dailyData=null, stnMarkers=[], stnOn=false; // pmData[tam_code] = {pm25, time}
 
 function centroid(f){
   const g=f.geometry;
@@ -128,11 +133,9 @@ function centroid(f){
 }
 
 async function init(){
-  const [gjr, cr, ar] = await Promise.all([fetch('rayong_tambon.geojson'), fetch('data/centroids.json'), fetch('data/alt_points.json')]);
+  const [gjr, cr] = await Promise.all([fetch('rayong_tambon.geojson'), fetch('data/centroids.json')]);
   gj = await gjr.json();
   const pre = cr.ok ? await cr.json() : {};
-  altPoints = ar.ok ? await ar.json() : {};
-  try{ ptOverride = JSON.parse(localStorage.getItem('pt_override_v1')||'{}'); }catch(e){ ptOverride={}; }
   gj.features.forEach(f=>{
     const c=f.properties.tam_code;
     centroids[c] = pre[c] || centroid(f); // ใช้จุด polylabel จากไฟล์ ถ้าไม่มีค่อยคำนวณ
@@ -165,16 +168,15 @@ async function init(){
       new maplibregl.Popup({maxWidth:'300px'}).setLngLat(e.lngLat).setHTML(`
         <div class="pp-name">ต.${p.tam_th} <span class="pp-amp">· ${p.amp_th}</span></div>
         <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
-          <span class="pp-val" style="color:${COLORS[lv]}">${d.pm25!=null?Math.round(d.pm25):'–'}</span>
+          <span class="pp-val" style="color:${COLORS[lv]}">${formatGistdaPm25(d.pm25)}</span>
           <span class="pp-unit">µg/m³</span>
           <span class="pp-badge" style="background:${COLORS[lv]}">${label}</span>
         </div>
-        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${d.avg24!=null?Math.round(d.avg24):'–'} µg/m³</div>
+        <div class="pp-unit" style="margin-top:2px">เฉลี่ย 24 ชม. ${formatGistdaPm25(d.avg24)} µg/m³</div>
         ${eocStatusLine(p.tam_code)}
         ${tabs}
         <div id="pcDaily">${daily}</div>
         <div id="pcHourly" style="display:${daily?'none':'block'}">${hourly}</div>
-        ${d.mismatch?'<div class="pp-time" style="color:#E8503B">⚠️ ค่าจากตำบลข้างเคียง</div>':''}
         <div class="pp-time">${d.time||''}</div>
       `).addTo(map);
     });
@@ -189,24 +191,31 @@ async function init(){
   });
 }
 
-async function fetchPoint(lat,lng){
-  const url = PROXY_URL
-    ? PROXY_URL.replace('{lat}',lat).replace('{lng}',lng)
-    : GISTDA_URL(lat,lng);
-  const r = await fetch(url);
+async function fetchTambon(code){
+  const r = await fetch(GISTDA_TAMBON_URL(code));
   if(!r.ok) throw new Error('HTTP '+r.status);
   const j = await r.json();
-  const d = j.data ?? j;
-  const pm = d.pm25 ?? null;
-  let t = '';
-  const hist = d.graphHistory24hrs;
-  if(Array.isArray(hist) && hist.length){
-    const iso = hist[hist.length-1][1];
-    t = formatGistdaThaiDateTime(iso);
-  }
-  const tb = d.loc && d.loc.tb_idn!=null ? String(d.loc.tb_idn) : null;
-  if(Array.isArray(d.pm25_amphoe) && d.pm25_amphoe.length) amphoeData = d.pm25_amphoe;
-  return {pm25: pm!=null?+pm:null, time:t, avg24: d.pm25Avg24hrs!=null?+d.pm25Avg24hrs:null, tb_idn: tb, hist: hist||[]};
+  const hist = j.graphHistory24hrs ?? (j.data&&j.data.graphHistory24hrs) ?? [];
+  if(!Array.isArray(hist)||!hist.length) throw new Error('No hourly data');
+  const vals=hist.map(h=>Number(h[0])).filter(Number.isFinite);
+  if(!vals.length) throw new Error('No numeric PM2.5 data');
+  const last=hist[hist.length-1];
+  return {
+    pm25:Number(last[0]),
+    time:formatGistdaThaiDateTime(last[1]),
+    avg24:vals.reduce((sum,v)=>sum+v,0)/vals.length,
+    tb_idn:String(code),
+    hist
+  };
+}
+
+async function refreshAmphoeSummary(){
+  try{
+    const r=await fetch(GISTDA_AMPHOE_URL);
+    if(!r.ok) return;
+    const j=await r.json();
+    if(Array.isArray(j.data)) amphoeData=j.data;
+  }catch(e){ console.warn('amphoe summary unavailable',e); }
 }
 
 async function loadPM(force){
@@ -215,7 +224,7 @@ async function loadPM(force){
   prog.style.display='block';
 
   // cache
-  const cacheKey='pm25_rayong_cache_v3';
+  const cacheKey='pm25_rayong_cache_v4';
   if(!force){
     try{
       const c=JSON.parse(localStorage.getItem(cacheKey));
@@ -224,54 +233,26 @@ async function loadPM(force){
     }catch(e){}
   }
 
-  const codes=Object.keys(centroids);
-  let done=0, fail=0; const mismatches=[];
+  const codes=gj.features.map(f=>f.properties.tam_code);
+  let done=0, fail=0;
   pc.textContent=`0/${codes.length}`;
   const queue=[...codes];
   async function worker(){
     while(queue.length){
       const code=queue.shift();
-      // ลำดับจุด: จุดที่เคยใช้ได้ → จุดหลัก → จุดสำรอง (ลึกขึ้นเรื่อย ๆ)
-      const cands=[];
-      if(ptOverride[code]) cands.push(ptOverride[code]);
-      cands.push(centroids[code], ...(altPoints[code]||[]));
-      let res=null;
       try{
-        for(const pt of cands){
-          const r=await fetchPoint(pt[1].toFixed(5),pt[0].toFixed(5));
-          if(!r.tb_idn || r.tb_idn===code){
-            res=r;
-            if(String(pt)!==String(centroids[code])){ ptOverride[code]=pt; }
-            break;
-          }
-          res=r; // เก็บตัวสุดท้ายไว้ใช้ถ้าไม่ตรงสักจุด
-        }
-        res.mismatch = !!(res.tb_idn && res.tb_idn!==code);
-        if(res.mismatch) mismatches.push({expect:code, got:res.tb_idn});
-        pmData[code]=res;
-      }catch(e){ if(res){pmData[code]=res;} else fail++; }
+        pmData[code]=await fetchTambon(code);
+      }catch(e){ fail++; }
       done++; pc.textContent=`${done}/${codes.length}`;
     }
   }
   await Promise.all(Array.from({length:CONCURRENCY},worker));
+  await refreshAmphoeSummary();
 
   const ts=Date.now();
   try{ localStorage.setItem(cacheKey,JSON.stringify({ts,data:pmData,amphoe:amphoeData})); }catch(e){}
-  try{ localStorage.setItem('pt_override_v1',JSON.stringify(ptOverride)); }catch(e){}
   applyData(ts); renderAmphoe();
   prog.style.display='none'; btn.disabled=false;
-  if(mismatches.length){
-    console.warn('Tambon mismatch:', mismatches);
-    const el=document.getElementById('updated');
-    el.textContent += ` · ⚠️ ${mismatches.length} ตำบลตกขอบเขต (แตะดู)`;
-    const detail = mismatches.map(m=>{
-      const f=gj.features.find(f=>f.properties.tam_code===m.expect);
-      return `ต.${f?f.properties.tam_th:m.expect} (คาด ${m.expect} ได้ ${m.got})`;
-    }).join('\n');
-    el.title = detail;
-    el.style.cursor='pointer';
-    el.onclick = ()=>alert('จุดเก็บค่าตกนอกเขตตาม GISTDA:\n'+detail+'\n\nค่าที่แสดงเป็นของพื้นที่ข้างเคียง (มักต่างกันน้อยมาก)');
-  }
   if(fail===codes.length){
     document.getElementById('updated').textContent='⚠️ ดึงข้อมูลไม่สำเร็จ (อาจติด CORS — ต้องใช้ proxy)';
   }
@@ -542,7 +523,7 @@ function renderAmphoe(){
       <span style="width:14px;color:#999">${i+1}</span>
       <span style="width:10px;height:10px;border-radius:50%;background:${COLORS[lv]};flex:none"></span>
       <span style="flex:1">${a.ap_tn}</span>
-      <b>${Math.round(+a.pm25)}</b></div>`;
+      <b>${formatGistdaPm25(a.pm25)}</b></div>`;
   }).join('');
   const panel=document.getElementById('ampPanel');
   if(window.innerWidth<640 && panel.style.display==='none')
@@ -556,7 +537,6 @@ function applyData(ts){
     f.properties.pm25 = d?d.pm25:null;
     f.properties.pm_time = d?d.time:'';
     f.properties.avg24 = d&&d.avg24!=null?d.avg24:null;
-    f.properties.mismatch = d?!!d.mismatch:false;
     f.properties.level = levelOf(d?d.pm25:null)[0];
   });
   if(map.getSource('tambon')) map.getSource('tambon').setData(gj);

@@ -4,19 +4,18 @@
 import json, urllib.request, datetime, os, time
 from concurrent.futures import ThreadPoolExecutor
 
-CENTROIDS = json.load(open('data/centroids.json'))
+TAMBON_CODES = list(json.load(open('data/centroids.json')).keys())
 HOURLY_DIR = 'data/hourly'
 DAILY_FILE = 'data/daily.json'
 KEEP_DAYS = 30
 
 def fetch(code):
-    lng, lat = CENTROIDS[code]
-    url = f"https://pm25.gistda.or.th/rest/getPm25byLocation?lat={lat}&lng={lng}"
+    url = f"https://pm25.gistda.or.th/rest/getPM25byTambon24hrs?tb_idn={code}"
     for attempt in range(3):
         try:
             with urllib.request.urlopen(url, timeout=20) as r:
                 j = json.load(r)
-            return code, (j.get('data') or {}).get('graphHistory24hrs') or []
+            return code, j.get('graphHistory24hrs') or (j.get('data') or {}).get('graphHistory24hrs') or []
         except Exception:
             time.sleep(2)
     return code, []
@@ -30,7 +29,7 @@ def main():
     os.makedirs(HOURLY_DIR, exist_ok=True)
     merged = {}  # date -> code -> hour -> val
     with ThreadPoolExecutor(max_workers=6) as ex:
-        for code, hist in ex.map(fetch, CENTROIDS.keys()):
+        for code, hist in ex.map(fetch, TAMBON_CODES):
             for val, iso in hist:
                 d, h = thai_parts(iso)
                 merged.setdefault(d, {}).setdefault(code, {})[h] = round(float(val), 2)
